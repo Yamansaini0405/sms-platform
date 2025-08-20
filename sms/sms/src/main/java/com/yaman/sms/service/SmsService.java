@@ -3,9 +3,9 @@ package com.yaman.sms.service;
 import com.yaman.sms.entity.EmployeeSmsLog;
 import com.yaman.sms.repository.EmployeeSmsLogRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.http.*;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -15,24 +15,23 @@ import java.util.Map;
 public class SmsService {
 
     private final EmployeeSmsLogRepository smsLogRepository;
+    private final RestTemplate restTemplate;
 
-    // TODO: Replace with your actual Fast2SMS API key
     private static final String FAST2SMS_API_KEY = "YOUR_FAST2SMS_API_KEY";
     private static final String FAST2SMS_URL = "https://www.fast2sms.com/dev/bulkV2";
 
     public EmployeeSmsLog sendSms(String employeeName, String phoneNumber, String message, EmployeeSmsLog.SmsType type) {
+
         EmployeeSmsLog log = EmployeeSmsLog.builder()
                 .employeeName(employeeName)
                 .phoneNumber(phoneNumber)
                 .smsType(type)
                 .message(message)
-                .status(EmployeeSmsLog.Status.FAILED) // default to FAILED, update after success
+                .status(EmployeeSmsLog.Status.FAILED)
                 .retryCount(0)
                 .build();
 
         try {
-            RestTemplate restTemplate = new RestTemplate();
-
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.set("authorization", FAST2SMS_API_KEY);
@@ -46,6 +45,7 @@ public class SmsService {
             body.put("numbers", phoneNumber);
 
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+
             ResponseEntity<String> response = restTemplate.exchange(
                     FAST2SMS_URL, HttpMethod.POST, entity, String.class
             );
@@ -62,37 +62,33 @@ public class SmsService {
 
         return smsLogRepository.save(log);
     }
+
+    // Retry logic for single SMS
     public EmployeeSmsLog retrySingleSms(Long logId) {
         EmployeeSmsLog log = smsLogRepository.findById(logId)
                 .orElseThrow(() -> new RuntimeException("SMS log not found with id " + logId));
 
         if (log.getStatus() == EmployeeSmsLog.Status.SUCCESS) {
-            throw new RuntimeException("SMS already sent successfully, retry not required.");
+            throw new RuntimeException("SMS already sent successfully.");
         }
 
         if (log.getRetryCount() >= 3) {
-            throw new RuntimeException("Max retry attempts reached for this SMS.");
+            throw new RuntimeException("Max retry attempts reached.");
         }
 
-        // increment retry count
         log.setRetryCount(log.getRetryCount() + 1);
 
-        // try sending again
         EmployeeSmsLog newLog = sendSms(log.getEmployeeName(), log.getPhoneNumber(), log.getMessage(), log.getSmsType());
-
-        // update retry count correctly
         newLog.setRetryCount(log.getRetryCount());
 
         return smsLogRepository.save(newLog);
     }
 
-
     // Retry all failed SMS
     public void retryFailedSms() {
         var failedLogs = smsLogRepository.findByStatus(EmployeeSmsLog.Status.FAILED);
-
         for (EmployeeSmsLog log : failedLogs) {
-            if (log.getRetryCount() < 3) { // retry max 3 times
+            if (log.getRetryCount() < 3) {
                 log.setRetryCount(log.getRetryCount() + 1);
                 sendSms(log.getEmployeeName(), log.getPhoneNumber(), log.getMessage(), log.getSmsType());
             }
